@@ -20,8 +20,8 @@ import app.cash.sqldelight.driver.android.AndroidSqliteDriver
 import com.google.firebase.FirebaseApp
 import com.youtube.clone.db.YoutubeDatabase
 import io.ktor.client.HttpClientConfig
-import io.ktor.client.plugins.cache.HttpCache
-import io.ktor.client.plugins.cache.storage.FileStorage
+import io.ktor.client.engine.okhttp.OkHttp
+import okhttp3.logging.HttpLoggingInterceptor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.company.app.shortcuts.TopTrending
@@ -61,8 +61,8 @@ class AppActivity : ComponentActivity() {
 
     private fun checkAndRequestPermissions() {
         val permissions = arrayOf(
-            android.Manifest.permission.WRITE_EXTERNAL_STORAGE,
-            android.Manifest.permission.READ_EXTERNAL_STORAGE
+            android.Manifest.permission.INTERNET,
+            android.Manifest.permission.ACCESS_NETWORK_STATE
         )
 
         val permissionsToRequest = permissions.filter {
@@ -86,12 +86,8 @@ class AppActivity : ComponentActivity() {
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == PERMISSION_REQUEST_CODE) {
-            if (grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
-                proceedWithTask()
-            } else {
-                Toast.makeText(this, "Permissions are required to proceed.", Toast.LENGTH_SHORT)
-                    .show()
-            }
+            // Allow app to proceed regardless of permission result
+            proceedWithTask()
         }
     }
 
@@ -221,11 +217,22 @@ fun copyExecutableToInternalStorage(context: Context): String {
 }
 
 actual fun HttpClientConfig<*>.setupHttpCache() {
-    install(HttpCache) {
-        val cacheDir = File(AndroidApp.INSTANCE.cacheDir, "myAppCache")
-        if (!cacheDir.exists()) {
-            cacheDir.mkdirs()
-        }
-        publicStorage(FileStorage(cacheDir))
+    /**
+     * Android-specific HTTP client configuration that uses OkHttp engine with proper logging.
+     * 
+     * CRITICAL FIX: The HttpLoggingInterceptor properly buffers response bodies, ensuring
+     * that the Ktor client can read the full response. This prevents Content-Length: 0 issues.
+     * 
+     * Previous Issue: Custom interceptors that consumed the response body before Ktor could read it
+     * would cause the API response to be empty (Content-Length: 0).
+     */
+    @Suppress("UNCHECKED_CAST")
+    val okHttpConfig = this as io.ktor.client.HttpClientConfig<io.ktor.client.engine.okhttp.OkHttpConfig>
+    okHttpConfig.engine {
+        addInterceptor(
+            HttpLoggingInterceptor().apply {
+                level = HttpLoggingInterceptor.Level.BODY
+            }
+        )
     }
 }
